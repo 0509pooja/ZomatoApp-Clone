@@ -1,8 +1,10 @@
-name: Build,Analyze,scan
+name: Build, Analyze, and Deploy
+
 on:
   push:
     branches:
       - main
+
 jobs:
   build-analyze-scan:
     name: Build
@@ -11,33 +13,45 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v2
         with:
-          fetch-depth: 0  # Shallow clones should be disabled for a better relevancy of analysis
+          fetch-depth: 0
+
       - name: Build and analyze with SonarQube
         uses: sonarsource/sonarqube-scan-action@master
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
           SONAR_HOST_URL: ${{ secrets.SONAR_HOST_URL }}
+
       - name: npm install dependency
         run: npm install
+
       - name: Trivy file scan
         run: trivy fs . > trivyfs.txt
+
       - name: Docker Build and push
         run: |
           docker build -t zomato .
           docker tag zomato pooja781/zomato:latest
-          docker login -u ${{ secrets.DOCKERHUB_USERNAME }} -p ${{ secrets.DOCKERHUB_TOKEN }}
+          echo "${{ secrets.DOCKERHUB_TOKEN }}" | docker login -u "${{ secrets.DOCKERHUB_USERNAME }}" --password-stdin
           docker push pooja781/zomato:latest
         env:
           DOCKER_CLI_ACI: 1
+
       - name: Image scan
         run: trivy image pooja781/zomato:latest > trivyimage.txt
+
   deploy:
-   needs: build-analyze-scan
-   runs-on: [self-hosted]
-   steps:
-      - name: docker pull image
+    name: Deploy
+    needs: build-analyze-scan
+    runs-on: [self-hosted]
+    steps:
+      - name: Docker pull image
         run: docker pull pooja781/zomato:latest
-      - name: Image scan
+
+      - name: Trivy image scan (deploy)
         run: trivy image pooja781/zomato:latest > trivyimagedeploy.txt
+
+      - name: Stop existing container (if any)
+        run: docker rm -f zomato || true
+
       - name: Deploy to container
         run: docker run -d --name zomato -p 3000:3000 pooja781/zomato:latest
