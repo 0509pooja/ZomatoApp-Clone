@@ -7,51 +7,73 @@ on:
 
 jobs:
   build-analyze-scan:
-    name: Build
+    name: Build, Analyze, and Scan
     runs-on: [self-hosted]
+
     steps:
       - name: Checkout code
         uses: actions/checkout@v2
         with:
           fetch-depth: 0
 
-      - name: Build and analyze with SonarQube
+      - name: Set up Node.js
+        uses: actions/setup-node@v3
+        with:
+          node-version: '18'
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: SonarQube Scan
         uses: sonarsource/sonarqube-scan-action@master
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
           SONAR_HOST_URL: ${{ secrets.SONAR_HOST_URL }}
 
-      - name: npm install dependency
-        run: npm install
+      - name: Trivy Filesystem Scan
+        run: trivy fs . --exit-code 0 --severity MEDIUM,HIGH,CRITICAL > trivyfs.txt
 
-      - name: Trivy file scan
-        run: trivy fs . > trivyfs.txt
-
-      - name: Docker Build and push
-        run: |
-          docker build -t zomato .
-          docker tag zomato pooja781/zomato:latest
-          echo "${{ secrets.DOCKERHUB_TOKEN }}" | docker login -u "${{ secrets.DOCKERHUB_USERNAME }}" --password-stdin
-          docker push pooja781/zomato:latest
+      - name: Docker Build and Push
         env:
           DOCKER_CLI_ACI: 1
+          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+          DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+        run: |
+          docker build -t zomato .
+          docker tag zomato $DOCKERHUB_USERNAME/zomato:latest
+          echo "$DOCKERHUB_TOKEN" | docker login -u "$DOCKERHUB_USERNAME" --password-stdin
+          docker push $DOCKERHUB_USERNAME/zomato:latest
 
-      - name: Image scan
-        run: trivy image pooja781/zomato:latest > trivyimage.txt
+      - name: Trivy Image Scan
+        run: trivy image ${{ secrets.DOCKERHUB_USERNAME }}/zomato:latest --exit-code 0 --severity MEDIUM,HIGH,CRITICAL > trivyimage.txt
 
   deploy:
-    name: Deploy
+    name: Deploy to Docker and EKS
     needs: build-analyze-scan
     runs-on: [self-hosted]
+
     steps:
-      - name: Docker pull image
-        run: docker pull pooja781/zomato:latest
+      - name: Pull Docker Image
+        run: docker pull ${{ secrets.DOCKERHUB_USERNAME }}/zomato:latest
 
-      - name: Trivy image scan (deploy)
-        run: trivy image pooja781/zomato:latest > trivyimagedeploy.txt
+      - name: Trivy Image Scan (Post Pull)
+        run: trivy image ${{ secrets.DOCKERHUB_USERNAME }}/zomato:latest --exit-code 0 --severity MEDIUM,HIGH,CRITICAL > trivyimagedeploy.txt
 
-      - name: Stop existing container (if any)
+      - name: Stop Existing Container
         run: docker rm -f zomato || true
 
-      - name: Deploy to container
-        run: docker run -d --name zomato -p 3000:3000 pooja781/zomato:latest
+      - name: Run Docker Container
+        run: docker run -d --name zomato -p 3000:3000 ${{ secrets.DOCKERHUB_USERNAME }}/zomato:latest
+
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v1
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ secrets.AWS_REGION }}
+
+      - name: Update Kubeconfig
+        run: aws eks update-kubeconfig --region ${{ secrets.AWS_REGION }} --name Zomato-EKS-Cluster
+
+      - name: Deploy to Kubernetes
+        run: kubectl apply -f deployment-service.yml
