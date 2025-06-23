@@ -29,3 +29,7 @@ resource "aws_iam_role" "NodeGroupRole" {
     ]
   })
 }
+resource "aws_iam_role_policy_attachment" "GithubEKSAccessAttach" {
+  policy_arn = aws_iam_policy.EKSAccessPolicy.arn
+  role       = aws_iam_role.GithubIAMRole.name
+}
