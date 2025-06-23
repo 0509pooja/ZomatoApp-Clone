@@ -1,0 +1,21 @@
+resource "kubernetes_config_map" "aws_auth" {
+  metadata {
+    name      = "aws-auth"
+    namespace = "kube-system"
+  }
+
+  data = {
+    mapRoles = yamlencode([
+      {
+        rolearn  = aws_iam_role.NodeGroupRole.arn
+        username = "system:node:{{EC2PrivateDNSName}}"
+        groups   = ["system:bootstrappers", "system:nodes"]
+      },
+      {
+        rolearn  = "arn:aws:iam::992313771121:role/Github-iam-role"
+        username = "github-runner"
+        groups   = ["system:masters"]
+      }
+    ])
+  }
+}
